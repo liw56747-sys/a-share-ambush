@@ -2,6 +2,9 @@
 __pycache__/
 *.pyc
 
+# 报告产物（云端生成后走 Pages artifact 展示，不提交回仓库）
+reports/
+
 # 本机盯盘工具运行产物（云端报告不涉及，避免误提交）
 data/*.json.tmp
 *.log

@@ -28,6 +28,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import learner
+
 BASE = Path(__file__).resolve().parent
 TZ = dt.timezone(dt.timedelta(hours=8))
 
@@ -243,8 +245,15 @@ AMBUSH_RULES = {
 }
 
 
-def ambush_screen(quotes, flows):
+def ambush_screen(quotes, flows, weights=None):
     rules = AMBUSH_RULES
+    # 可调权重：learner 学出来的主权重（辨识度/蓄势/时机），默认为原始设计比例
+    if weights is None:
+        weights = {"w_identify": 50.0, "w_setup": 25.0, "w_timing": 25.0}
+    # 把"原始满分"缩放为"调参后的满分"：辨识度原 50 分、蓄势原 25 分、时机原 25 分
+    k_id = weights["w_identify"] / 50.0
+    k_setup = weights["w_setup"] / 25.0
+    k_timing = weights["w_timing"] / 25.0
     result = []
     for code, q in quotes.items():
         stock = STOCKS.get(code)
@@ -271,10 +280,10 @@ def ambush_screen(quotes, flows):
             continue
 
         score, tags = 0.0, []
-        price_score = max(0.0, 1.0 - price / rules["max_price"]) * 30.0
+        price_score = max(0.0, 1.0 - price / rules["max_price"]) * 30.0 * k_id
         cap_score = 0.0
         if float_cap is not None and float_cap > 0:
-            cap_score = max(0.0, 1.0 - float_cap / rules["max_float_cap"]) * 20.0
+            cap_score = max(0.0, 1.0 - float_cap / rules["max_float_cap"]) * 20.0 * k_id
         score += price_score + cap_score
         if price <= 10.0:
             tags.append("低价")
@@ -283,24 +292,24 @@ def ambush_screen(quotes, flows):
 
         if turnover is not None:
             if pct > 0.5 and rules["gentle_low"] <= turnover <= rules["gentle_high"]:
-                score += 25.0
+                score += 25.0 * k_setup
                 tags.append("温和放量")
             elif rules["chill_low"] <= turnover <= rules["gentle_low"]:
-                score += 20.0
+                score += 20.0 * k_setup
                 tags.append("缩量蓄势")
             else:
                 dist = min(abs(turnover - rules["gentle_low"]), abs(turnover - rules["gentle_high"]))
-                score += max(0.0, 15.0 - dist * 1.5)
+                score += max(0.0, 15.0 - dist * 1.5) * k_setup
 
         if 0.0 <= pct <= 4.0:
-            score += 25.0
+            score += 25.0 * k_timing
             if pct >= 1.0:
                 tags.append("温和上涨")
         elif 4.0 < pct <= rules["max_pct"]:
-            score += 25.0 - (pct - 4.0) * 3.0
+            score += (25.0 - (pct - 4.0) * 3.0) * k_timing
             tags.append("涨幅偏高")
         else:
-            score += 18.0 + max(pct, -4.0)
+            score += (18.0 + max(pct, -4.0)) * k_timing
             tags.append("低位潜伏")
 
         main = flows.get(code, {}).get("main")
@@ -384,6 +393,9 @@ def build_html(report):
     emotion = d["emotion"]
     limitup = d["limitup"]
     ambush = d["ambush"]
+    weights = d.get("weights") or {"w_identify": 50.0, "w_setup": 25.0, "w_timing": 25.0}
+    tuning = d.get("tuning")
+    eval_result = d.get("evaluation")
 
     # 情绪五阶段指示条
     stages = ["冰点期", "修复期", "发酵期", "高潮期", "退潮期"]
@@ -448,6 +460,52 @@ def build_html(report):
 
     ambush_top = ambush[:30]
 
+    # 自我学习状态卡片
+    def learn_card():
+        w = weights
+        wl = [
+            ("辨识度(低价+小盘)", w.get("w_identify", 50)),
+            ("蓄势(换手形态)", w.get("w_setup", 25)),
+            ("时机(涨幅位置)", w.get("w_timing", 25)),
+        ]
+        bars = "".join(
+            f'<div class="lrow"><span class="lname">{name}</span>'
+            f'<div class="lbar"><div class="lfill" style="width:{min(v,100):.0f}%"></div></div>'
+            f'<span class="lval">{v:.0f}</span></div>'
+            for name, v in wl
+        )
+        tuning_html = ""
+        if tuning and tuning.get("status") == "已调参":
+            changes = tuning.get("changes", {})
+            ch = "".join(
+                f'<li>{k}：{c["from"]} → {c["to"]}（该维度相对均值 {c["delta_avg"]:+.2f}%）</li>'
+                for k, c in changes.items()
+            ) if changes else "<li>本轮无需调整（各维度表现接近均值）</li>"
+            tuning_html = (f'<div class="lnote">📈 本轮调参：<ul>{ch}</ul>'
+                           f'整体胜率 {tuning.get("overall_win")}%，'
+                           f'样本 {tuning.get("samples")} 个</div>')
+        elif tuning:
+            tuning_html = (f'<div class="lnote">📚 学习积累中：{tuning.get("status")}'
+                           f'（已有 {tuning.get("samples", 0)} 个样本，'
+                           f'需 {tuning.get("need", 3)} 天起开始自动调参）</div>')
+
+        eval_html = ""
+        if eval_result:
+            g = "".join(
+                f'<span class="tag">{r["name"]} {r["pct"]:+.1f}%</span>'
+                for r in eval_result.get("top_gainers", [])
+            )
+            eval_html = (f'<div class="lnote">🔍 昨日埋伏候选今日验证：'
+                         f'胜率 <b>{eval_result["win_rate"]}%</b>，'
+                         f'平均 <b>{eval_result["avg_pct"]:+.2f}%</b>'
+                         f'（{eval_result["evaluated"]}/{eval_result["total"]} 只）<br>'
+                         f'涨幅居前：{g}</div>')
+        elif weights.get("w_identify") == 50.0 and weights.get("w_setup") == 25.0:
+            eval_html = '<div class="lnote">📚 今天是首个交易日，尚未积累历史信号，学习能力从明天起逐步生效。</div>'
+
+        return (f'<div class="card"><h2>④ 自我学习状态 <span class="muted">（信号追踪 + 自动调参）</span></h2>'
+                f'{bars}{tuning_html}{eval_html}</div>')
+
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -486,6 +544,14 @@ tr:last-child td {{ border-bottom:none; }}
 .strong {{ font-weight:700; }}
 .tag {{ display:inline-block; background:#22304a; color:#aebdd9; border-radius:4px;
   padding:1px 6px; margin:1px 2px; font-size:11px; white-space:nowrap; }}
+.lrow {{ display:flex; align-items:center; gap:8px; margin:6px 0; }}
+.lname {{ width:150px; font-size:13px; color:var(--muted); }}
+.lbar {{ flex:1; height:8px; background:#141b2b; border-radius:4px; overflow:hidden; }}
+.lfill {{ height:100%; background:linear-gradient(90deg,var(--accent),#7c9cff); border-radius:4px; }}
+.lval {{ width:36px; text-align:right; font-size:13px; font-weight:700; }}
+.lnote {{ font-size:12px; color:var(--muted); margin-top:8px; line-height:1.7; }}
+.lnote b {{ color:var(--tx); }}
+.lnote ul {{ margin:4px 0 4px 18px; padding:0; }}
 .footer {{ margin-top:36px; color:var(--muted); font-size:12px; text-align:center; }}
 </style></head><body><div class="wrap">
 <h1>📊 A股收盘埋伏 · 每日复盘</h1>
@@ -514,6 +580,8 @@ tr:last-child td {{ border-bottom:none; }}
 <h2>③ 埋伏候选池 <span class="muted">（三层打分 · 前 30 只）</span></h2>
 {ambush_table(ambush_top)}
 </div>
+
+{learn_card()}
 
 <div class="footer">本报告由云端定时任务自动生成，仅供个人复盘参考，不构成任何投资建议。<br>股市有风险，投资需谨慎。</div>
 </div></body></html>"""
@@ -563,6 +631,34 @@ def main():
     # 4. 情绪周期
     emotion = judge_emotion(zt_rows, zt_total, dt_total, max_lbc)
 
+    # ---- 自我学习：加载历史 → 回测昨日 → 自动调参 → 用新权重打分 ----
+    print("[learn] 加载历史信号 ...", flush=True)
+    history = learner.load_history()
+    tuning = None
+    eval_result = None
+    # 4a. 回测昨日信号（若有前一日信号）
+    if history:
+        prev = history[-1]
+        prev_date = prev.get("date")
+        # 若昨日信号还没被评估过，用今日行情回填 next_pct 并评估
+        if prev_date != trade_date and any(c.get("next_pct") is None for c in prev.get("ambush_top", [])):
+            eval_result = learner.evaluate_yesterday(quotes, prev)
+            # 把 next_pct 回填到 history（供 auto_tune 用）
+            qmap = {c["code"]: c for c in prev.get("ambush_top", [])}
+            for c in prev.get("ambush_top", []):
+                q = quotes.get(c.get("code"))
+                if q and q.get("pct") is not None:
+                    c["next_pct"] = q["pct"]
+            if eval_result:
+                print(f"[learn] 昨日信号验证：胜率 {eval_result['win_rate']}%，"
+                      f"平均 {eval_result['avg_pct']}%，样本 {eval_result['evaluated']}/{eval_result['total']}", flush=True)
+    # 4b. 自动调参（基于历史 + next_pct）
+    weights, tuning = learner.auto_tune(history)
+    if tuning and tuning.get("status") == "已调参":
+        print(f"[learn] 已调参：{tuning.get('changes')}", flush=True)
+    elif tuning:
+        print(f"[learn] 调参状态：{tuning.get('status')}（样本 {tuning.get('samples')}）", flush=True)
+
     # 5. 连板梯队分组
     high = [r for r in zt_rows if r["lbc"] >= 3]
     second = [r for r in zt_rows if r["lbc"] == 2]
@@ -575,13 +671,17 @@ def main():
         first=[dict(r, days=1) for r in first],
     )
 
-    # 6. 埋伏候选池
+    # 6. 埋伏候选池（用调参后的权重）
     print("[report] 运行埋伏候选池 ...", flush=True)
-    ambush = ambush_screen(quotes, flows)
+    ambush = ambush_screen(quotes, flows, weights)
     print(f"[report] 埋伏候选 {len(ambush)} 只", flush=True)
 
+    # 7. 持久化当日信号（写入历史，供后续学习）
+    learner.persist_signal(trade_date, emotion, limitup, ambush)
+
     report = dict(date=trade_date, generated=now_local().isoformat(),
-                  emotion=emotion, limitup=limitup, ambush=ambush)
+                  emotion=emotion, limitup=limitup, ambush=ambush,
+                  weights=weights, tuning=tuning, evaluation=eval_result)
 
     html = build_html(report)
     out = BASE / "reports" / f"ambush-report-{trade_date}.html"

@@ -31,6 +31,17 @@ jobs:
       - name: 生成报告
         run: python report.py
 
+      - name: 提交学习记忆（history/learn 目录）
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add history/ learn/ 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "无学习记忆变更"
+          else
+            git commit -m "learn: 记录 $(date +%F) 信号与调参" && git push || echo "提交失败，跳过"
+          fi
+
       - name: 准备 Pages 静态目录
         run: |
           mkdir -p _site
