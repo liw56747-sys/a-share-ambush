@@ -26,14 +26,12 @@ def send_wechat(title, desp):
         return False
 
     # Server酱³（sctp 开头）用新域名；经典（SCT 开头）用 sctapi
-    if sendkey.startswith("sctp"):
-        # uid 是 sctp 与 t 之间的数字
-        parts = sendkey.split("t")
-        if len(parts) >= 2:
-            uid = parts[0][4:]  # 去掉 "sctp"
-            url = f"https://{uid}.push.ft07.com/send/{sendkey}.send"
-        else:
-            url = f"https://sctapi.ftqq.com/{sendkey}.send"
+    # 官方 uid 提取正则：/^sctp(\d+)t/
+    import re as _re
+    m = _re.match(r"^sctp(\d+)t", sendkey)
+    if m:
+        uid = m.group(1)
+        url = f"https://{uid}.push.ft07.com/send/{sendkey}.send"
     else:
         url = f"https://sctapi.ftqq.com/{sendkey}.send"
 
