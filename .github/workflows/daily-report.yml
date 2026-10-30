@@ -35,7 +35,10 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add history/ learn/ 2>/dev/null || true
+          # 分别 add，避免某个目录不存在导致整条 git add 失败
+          for d in history learn; do
+            [ -d "$d" ] && git add "$d" || true
+          done
           if git diff --cached --quiet; then
             echo "无学习记忆变更"
           else
