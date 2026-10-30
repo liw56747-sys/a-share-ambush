@@ -1,0 +1,7 @@
+# Python
+__pycache__/
+*.pyc
+
+# 本机盯盘工具运行产物（云端报告不涉及，避免误提交）
+data/*.json.tmp
+*.log

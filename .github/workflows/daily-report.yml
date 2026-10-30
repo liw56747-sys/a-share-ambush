@@ -1,0 +1,55 @@
+name: A股收盘埋伏复盘
+
+on:
+  schedule:
+    # 每周一至五 15:30 北京时间（UTC+8 -> UTC 07:30）
+    - cron: "30 7 * * 1-5"
+  workflow_dispatch: {}  # 支持手动触发测试
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# 允许同一 workflow 内并发部署，避免冲突
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 生成报告
+        run: python report.py
+
+      - name: 准备 Pages 静态目录
+        run: |
+          mkdir -p _site
+          cp reports/latest.html _site/index.html
+          # 历史报告也一并保留，便于回溯
+          cp reports/ambush-report-*.html _site/ 2>/dev/null || true
+
+      - name: 上传 Pages 产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: report
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 部署到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
