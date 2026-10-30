@@ -31,6 +31,17 @@ jobs:
       - name: 生成报告
         run: python report.py
 
+      - name: 推送到微信（Server酱）
+        env:
+          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+        run: |
+          MD=$(ls reports/wechat-summary-*.md 2>/dev/null | tail -1)
+          if [ -n "$MD" ]; then
+            python notify.py "$MD"
+          else
+            echo "未找到微信摘要文件，跳过推送"
+          fi
+
       - name: 提交学习记忆（history/learn 目录）
         run: |
           git config user.name "github-actions"

@@ -702,6 +702,51 @@ def main():
     print("===SUMMARY_JSON===")
     print(json.dumps(summary, ensure_ascii=False))
 
+    # 生成微信推送摘要（Markdown），供 Server酱 推送用
+    wechat_md = build_wechat_summary(trade_date, emotion, limitup, ambush)
+    md_path = BASE / "reports" / f"wechat-summary-{trade_date}.md"
+    md_path.write_text(wechat_md, encoding="utf-8")
+    print(f"[report] 已生成微信摘要 {md_path}", flush=True)
+
+
+def build_wechat_summary(date_str, emotion, limitup, ambush):
+    """生成微信推送用的 Markdown 摘要（Server酱 desp 字段）。"""
+    lines = []
+    lines.append(f"### A股收盘复盘 · {date_str}")
+    lines.append("")
+    lines.append(f"**情绪阶段：{emotion['stage']}**")
+    lines.append(f"> {emotion['advice']}")
+    lines.append("")
+    lines.append(f"- 涨停 {emotion['zt_n']} 家 / 跌停 {emotion['dt_n']} 家")
+    lines.append(f"- 最高连板 {emotion['max_lbc']} 板 / 晋级率 {emotion['promo']}%")
+    lines.append("")
+
+    # 连板梯队摘要
+    high = limitup.get("high", [])
+    second = limitup.get("second", [])
+    if high or second:
+        lines.append("**连板梯队**")
+        if high:
+            names = "、".join(r["name"] for r in high[:5])
+            lines.append(f"- 高连板：{names}")
+        if second:
+            names = "、".join(r["name"] for r in second[:8])
+            lines.append(f"- 二板节点票：{names}")
+        lines.append("")
+
+    # 埋伏候选 top5
+    lines.append("**埋伏候选 Top5**")
+    for i, r in enumerate(ambush[:5], 1):
+        tags = " ".join(r["tags"][:3])
+        lines.append(f"{i}. {r['name']}（{r['code']}）{r['price']:.2f}元 "
+                     f"{r['pct']:+.2f}% · 评分{r['score']:.0f} · {tags}")
+    lines.append("")
+    lines.append(f"[查看完整报告](https://liw56747-sys.github.io/a-share-ambush/)")
+    lines.append("")
+    lines.append("---")
+    lines.append("仅供参考，不构成投资建议。")
+    return "\n".join(lines)
+
 
 if __name__ == "__main__":
     main()
